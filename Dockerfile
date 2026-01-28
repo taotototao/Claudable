@@ -19,6 +19,9 @@ ENV npm_config_ignore_scripts=true
 
 RUN npm ci
 
+# Claude Code CLI
+RUN npm install -g @anthropic-ai/claude-code
+
 # ------------------------
 # Build
 # ------------------------
