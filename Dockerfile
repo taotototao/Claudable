@@ -1,43 +1,53 @@
-FROM node:20-alpine AS base
+# ------------------------
+# Base
+# ------------------------
+FROM node:18-alpine AS base
 
-# Install dependencies only when needed
+# ------------------------
+# Dependencies
+# ------------------------
 FROM base AS deps
 RUN apk add --no-cache libc6-compat openssl sqlite
 WORKDIR /app
 
-# Copy package files
 COPY package.json package-lock.json* ./
-
-# Install dependencies
 RUN npm ci
 
-# Rebuild the source code only when needed
+# ------------------------
+# Build
+# ------------------------
 FROM base AS builder
 WORKDIR /app
+
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# Generate Prisma Client
+# Prisma client
 RUN npx prisma generate
 
-# Build Next.js application
+# Build Next.js
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
-# Production image
-FROM base AS runner
+# ------------------------
+# Production
+# ------------------------
+FROM node:18-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
+ENV PORT=3000
+ENV HOSTNAME=0.0.0.0
 
-# Install sqlite for runtime
-RUN apk add --no-cache sqlite
+# Runtime deps (IMPORTANT for Prisma)
+RUN apk add --no-cache sqlite openssl libc6-compat
 
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
+# Non-root user
+RUN addgroup --system --gid 1001 nodejs \
+ && adduser --system --uid 1001 nextjs
 
-# Copy necessary files
+# App files
 COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
@@ -45,12 +55,12 @@ COPY --from=builder --chown=nextjs:nodejs /app/prisma ./prisma
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules/@prisma ./node_modules/@prisma
 
-# Create data directory for SQLite with proper permissions
-RUN mkdir -p /app/data && \
-    chown -R nextjs:nodejs /app/data && \
-    chmod -R 777 /app/data
+# SQLite data directory
+RUN mkdir -p /app/data \
+ && chown -R nextjs:nodejs /app/data \
+ && chmod 755 /app/data
 
-# Copy entrypoint script
+# Entrypoint
 COPY --chown=nextjs:nodejs docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
 
@@ -58,12 +68,8 @@ USER nextjs
 
 EXPOSE 3000
 
-ENV PORT=3000
-ENV HOSTNAME="0.0.0.0"
-
-# Healthcheck
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:3000', (r) => {process.exit(r.statusCode < 500 ? 0 : 1)})" || exit 1
+  CMD node -e "require('http').get('http://localhost:3000', r => process.exit(r.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))"
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["node", "server.js"]
