@@ -1,73 +1,75 @@
-############################
-# 1️⃣ Base
-############################
+# ------------------------
+# Base
+# ------------------------
 FROM node:20-alpine AS base
+
+RUN apk add --no-cache libc6-compat openssl sqlite git bash
 WORKDIR /app
-RUN apk add --no-cache libc6-compat git
 
-
-############################
-# 2️⃣ Déps
-############################
+# ------------------------
+# Dependencies
+# ------------------------
 FROM base AS deps
 
-COPY package.json package-lock.json* ./
+# Copy EVERYTHING first (important for postinstall)
+COPY . .
+
+# Disable postinstall during build (avoid setup-env.js crash)
+ENV npm_config_ignore_scripts=true
+
 RUN npm ci
 
-
-############################
-# 3️⃣ Build
-############################
+# ------------------------
+# Build
+# ------------------------
 FROM base AS builder
-
 WORKDIR /app
+
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-ENV NEXT_TELEMETRY_DISABLED=1
+# Prisma
+RUN npx prisma generate
 
+# Build Next.js
+ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
-
-############################
-# 4️⃣ Runner (PRODUCTION)
-############################
+# ------------------------
+# Production
+# ------------------------
 FROM node:20-alpine AS runner
 WORKDIR /app
 
-# 👉 Vars runtime
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
 
-# 👉 IMPORTANT : rendre les binaires globaux visibles
-ENV PATH="/usr/local/bin:${PATH}"
+RUN apk add --no-cache sqlite openssl libc6-compat git bash
 
-# 👉 Dépendances runtime
-RUN apk add --no-cache \
-    libc6-compat \
-    git \
-    bash
-
-# 👉 INSTALL CLAUDE CODE (ICI est la clé)
+# Install Claude Code CLI (Anthropic)
 RUN npm install -g @anthropic-ai/claude-code \
  && ln -s /usr/local/bin/claude /usr/bin/claude
 
-# 👉 Sécurité
-RUN addgroup --system --gid 1001 nextjs \
+RUN addgroup --system --gid 1001 nodejs \
  && adduser --system --uid 1001 nextjs
 
-# 👉 Fichiers Next.js standalone
 COPY --from=builder /app/public ./public
-COPY --from=builder /app/.next/standalone ./
-COPY --from=builder /app/.next/static ./.next/static
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+COPY --from=builder --chown=nextjs:nodejs /app/prisma ./prisma
+COPY --from=builder --chown=nextjs:nodejs /app/node_modules ./node_modules
 
-# 👉 Permissions (important pour Claudable)
-RUN chown -R nextjs:nextjs /app
+RUN mkdir -p /app/data \
+ && chown -R nextjs:nodejs /app/data
+
+COPY --chown=nextjs:nodejs docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
 
 USER nextjs
 
 EXPOSE 3000
 
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["node", "server.js"]
