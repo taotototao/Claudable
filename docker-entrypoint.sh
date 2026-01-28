@@ -3,44 +3,31 @@ set -e
 
 echo "🚀 Starting Claudable..."
 
-# Vérifier que DATABASE_URL est défini
+# Default DATABASE_URL
 if [ -z "$DATABASE_URL" ]; then
-  echo "⚠️  DATABASE_URL not set, using default SQLite"
+  echo "⚠️  DATABASE_URL not set, using SQLite"
   export DATABASE_URL="file:/app/data/cc.db"
 fi
 
-echo "✅ DATABASE_URL configured"
+echo "✅ DATABASE_URL = $DATABASE_URL"
 
-# Créer le répertoire data si nécessaire
+# Ensure data directory exists
 mkdir -p /app/data
-chmod 777 /app/data
 
-# Initialiser la base de données SQLite
 echo "📦 Initializing database..."
 
-# Vérifier si la base existe déjà
+PRISMA="node node_modules/.bin/prisma"
+
 if [ -f "/app/data/cc.db" ]; then
-  echo "✅ Database exists, checking schema..."
-  
-  # Appliquer les migrations si nécessaire
-  if npx prisma migrate deploy 2>&1; then
-    echo "✅ Migrations applied successfully"
-  else
-    echo "⚠️  Migration failed, trying db push..."
-    npx prisma db push --skip-generate --accept-data-loss 2>&1 || echo "⚠️  DB push warning (continuing)"
-  fi
+  echo "✅ Database exists"
+  echo "🔄 Applying migrations (best effort)..."
+  $PRISMA migrate deploy || echo "⚠️  migrate deploy skipped"
 else
   echo "📦 Creating new database..."
-  npx prisma db push --skip-generate --accept-data-loss 2>&1 || echo "⚠️  DB creation warning (continuing)"
-  echo "✅ Database created"
+  $PRISMA db push --skip-generate --accept-data-loss || echo "⚠️  db push warning"
 fi
-
-# S'assurer que les permissions sont correctes
-chmod 666 /app/data/cc.db 2>/dev/null || true
-chmod 777 /app/data 2>/dev/null || true
 
 echo "✅ Database ready"
 echo "🎉 Starting Claudable application..."
 
-# Lancer l'application
 exec "$@"
